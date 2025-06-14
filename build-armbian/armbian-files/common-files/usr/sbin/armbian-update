@@ -116,8 +116,9 @@ check_disk() {
 
     # Find the disk where the partition is located, only supports mmcblk?p? sd?? hd?? vd?? and other formats
     case "${ROOT_PTNAME}" in
-    mmcblk?p[1-4])
+    mmcblk?p[1-7])
         DISK_NAME="${ROOT_PTNAME:0:-2}"
+        ## all partitions of mmcblk?p[1-7] are used for eMMC
         ;;
     [hsv]d[a-z][1-4])
         DISK_NAME="${ROOT_PTNAME:0:-1}"
@@ -496,6 +497,8 @@ update_kernel() {
     [[ "${PLATFORM}" == "amlogic" ]] && (cd /boot && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} zImage)
     [[ "${PLATFORM}" == "rockchip" ]] && (cd /boot && ln -sf uInitrd-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
     [[ "${PLATFORM}" == "allwinner" ]] && (cd /boot && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} Image)
+    # for efused-wxy-oec, we use initrd.img-${kernel_name} and vmlinuz-${kernel_name}
+    [[ "${BOARD}" == "efused-wxy-oec" ]] && (cd /boot && ln -sf initrd.img-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
     [[ "$(ls /boot/*${kernel_name}* -l 2>/dev/null | grep "^-" | wc -l)" -ge "4" ]] || error_msg "The /boot files is missing."
     echo -e "${INFO} (1/4) Unpacking [ boot-${kernel_name}.tar.gz ] succeeded."
 
