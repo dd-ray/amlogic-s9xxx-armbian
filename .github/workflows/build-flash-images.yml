@@ -1,0 +1,252 @@
+#==========================================================================
+# Description: Build Flash Images for efused devices
+# Copyright (C) 2025 https://github.com/dd-ray/amlogic-s9xxx-armbian
+#==========================================================================
+
+name: Build Flash Images
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      source_release_tag:
+        description: "从哪个release获取源镜像"
+        required: false
+        default: "Armbian_bookworm_save_2025.06"
+        type: string
+      build_device:
+        description: "选择构建设备"
+        required: false
+        default: "efused-wxy-oec"
+        type: choice
+        options:
+          - efused-wxy-oec
+      flash_release_tag:
+        description: "Flash镜像发布标签"
+        required: false
+        default: "Armbian_debian"
+        type: string
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build-flash-images:
+    runs-on: ubuntu-22.04
+    if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: 初始化构建环境
+        id: init
+        run: |
+          echo "构建环境初始化..."
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y gdisk parted zip unzip curl wget jq tar
+          
+          # 设置工作目录
+          FLASH_WORKSPACE="${GITHUB_WORKSPACE}/flash_build"
+          mkdir -p "${FLASH_WORKSPACE}"
+          echo "FLASH_WORKSPACE=${FLASH_WORKSPACE}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$(date +"%Y.%m.%d.%H%M")" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=${{ inputs.flash_release_tag || 'Armbian_debian' }}" >> $GITHUB_OUTPUT
+          echo "SOURCE_TAG=${{ inputs.source_release_tag || 'Armbian_bookworm_save_2025.06' }}" >> $GITHUB_OUTPUT
+
+      - name: 下载源镜像文件
+        id: download
+        run: |
+          echo "从 release ${{ steps.init.outputs.SOURCE_TAG }} 下载源镜像..."
+          
+          # 获取release信息
+          RELEASE_INFO=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.init.outputs.SOURCE_TAG }}")
+          
+          # 根据设备类型选择要下载的镜像
+          DEVICE_PATTERN="${{ inputs.build_device || 'efused-wxy-oec' }}"
+          
+          if [[ "${DEVICE_PATTERN}" == "efused-wxy-oec" ]]; then
+            # 获取所有匹配设备的镜像文件，并按日期排序选择最新的
+            echo "查找所有匹配 '${DEVICE_PATTERN}' 的镜像文件..."
+            
+            # 获取所有匹配的文件名和对应的下载链接
+            MATCHING_FILES=$(echo "${RELEASE_INFO}" | jq -r '.assets[] | select(.name | contains("efused-wxy-oec") and (endswith(".img.gz") or endswith(".img.xz") or endswith(".img"))) | "\(.name)|\(.browser_download_url)"')
+            
+            if [[ -z "${MATCHING_FILES}" ]]; then
+              echo "未找到匹配的镜像文件"
+              exit 1
+            fi
+            
+            echo "找到的镜像文件："
+            echo "${MATCHING_FILES}"
+            
+            # 解析文件名中的日期并找到最新的
+            LATEST_FILE=""
+            LATEST_DATE=""
+            LATEST_URL=""
+            
+            while IFS='|' read -r filename download_url; do
+              # 从文件名中提取日期 (格式: YYYY.MM.DD)
+              DATE_PART=$(echo "${filename}" | grep -oE '[0-9]{4}\.[0-9]{2}\.[0-9]{2}' | tail -1)
+              
+              if [[ -n "${DATE_PART}" ]]; then
+                echo "文件: ${filename} -> 日期: ${DATE_PART}"
+                
+                # 将日期转换为可比较的格式 (YYYYMMDD)
+                COMPARABLE_DATE=$(echo "${DATE_PART}" | sed 's/\.//g')
+                
+                if [[ -z "${LATEST_DATE}" ]] || [[ "${COMPARABLE_DATE}" > "${LATEST_DATE}" ]]; then
+                  LATEST_DATE="${COMPARABLE_DATE}"
+                  LATEST_FILE="${filename}"
+                  LATEST_URL="${download_url}"
+                fi
+              else
+                echo "警告: 文件 ${filename} 中未找到日期信息"
+              fi
+            done <<< "${MATCHING_FILES}"
+            
+            if [[ -z "${LATEST_FILE}" ]]; then
+              echo "未找到带有日期信息的镜像文件"
+              exit 1
+            fi
+            
+            FILENAME="${LATEST_FILE}"
+            DOWNLOAD_URL="${LATEST_URL}"
+            ORIGINAL_DATE="${LATEST_DATE:0:4}.${LATEST_DATE:4:2}.${LATEST_DATE:6:2}"
+            
+            echo "选择最新镜像: ${FILENAME} (日期: ${ORIGINAL_DATE})"
+          else
+            # 下载所有支持的设备镜像
+            echo "暂时只支持 efused-wxy-oec 设备"
+            exit 1
+          fi
+          
+          if [[ -z "${DOWNLOAD_URL}" || "${DOWNLOAD_URL}" == "null" ]]; then
+            echo "未找到匹配的镜像文件"
+            exit 1
+          fi
+          
+          echo "下载文件: ${FILENAME}"
+          echo "下载链接: ${DOWNLOAD_URL}"
+          
+          # 下载文件
+          cd "${{ steps.init.outputs.FLASH_WORKSPACE }}"
+          wget -O "${FILENAME}" "${DOWNLOAD_URL}"
+          
+          echo "SOURCE_IMAGE=${FILENAME}" >> $GITHUB_OUTPUT
+          echo "SOURCE_PATH=${{ steps.init.outputs.FLASH_WORKSPACE }}/${FILENAME}" >> $GITHUB_OUTPUT
+
+      - name: 构建Flash镜像
+        id: build_flash
+        run: |
+          echo "开始构建Flash镜像..."
+          
+          cd "${{ steps.init.outputs.FLASH_WORKSPACE }}"
+          
+          # 运行Flash镜像构建脚本
+          sudo bash "${GITHUB_WORKSPACE}/build-armbian/create-flash-image.sh" \
+            "${{ steps.download.outputs.SOURCE_PATH }}" \
+            "${{ inputs.build_device || 'efused-wxy-oec' }}" \
+            "${{ steps.init.outputs.FLASH_WORKSPACE }}"
+          
+          # 查找生成的Flash镜像
+          FLASH_IMAGE=$(ls Flash_*.zip | head -1)
+          
+          if [[ -z "${FLASH_IMAGE}" ]]; then
+            echo "Flash镜像构建失败"
+            exit 1
+          fi
+          
+          echo "构建完成: ${FLASH_IMAGE}"
+          echo "FLASH_IMAGE=${FLASH_IMAGE}" >> $GITHUB_OUTPUT
+          echo "FLASH_PATH=${{ steps.init.outputs.FLASH_WORKSPACE }}/${FLASH_IMAGE}" >> $GITHUB_OUTPUT
+          
+          # 生成SHA256校验文件
+          sha256sum "${FLASH_IMAGE}" > "${FLASH_IMAGE}.sha256"
+          echo "SHA256_FILE=${FLASH_IMAGE}.sha256" >> $GITHUB_OUTPUT
+
+      - name: 检查或创建Flash Release
+        id: release
+        run: |
+          # 检查release是否存在
+          RELEASE_TAG="${{ steps.init.outputs.RELEASE_TAG }}"
+          
+          RELEASE_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}" | \
+            jq -r '.id // empty')
+          
+          if [[ -z "${RELEASE_ID}" ]]; then
+            echo "创建新的release: ${RELEASE_TAG}"
+            RELEASE_DATA=$(curl -s -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" \
+              -d '{
+                "tag_name": "'${RELEASE_TAG}'",
+                "name": "'${RELEASE_TAG}'",
+                "body": "Flash镜像包含完整的分区结构：\n\n* 分区1-5: 原厂分区\n* 分区6: boot分区  \n* 分区7: 系统分区\n\n使用方法：\n1. 解压zip文件\n2. 使用rkdevtool或类似工具写入Flash\n\n⚠️ 警告：刷入前请确保备份重要数据！",
+                "draft": false,
+                "prerelease": false
+              }')
+            RELEASE_ID=$(echo "${RELEASE_DATA}" | jq -r '.id')
+          else
+            echo "使用现有release: ${RELEASE_TAG} (ID: ${RELEASE_ID})"
+          fi
+          
+          echo "RELEASE_ID=${RELEASE_ID}" >> $GITHUB_OUTPUT
+
+      - name: 上传Flash镜像到Release
+        id: upload
+        run: |
+          echo "上传Flash镜像到release..."
+          
+          cd "${{ steps.init.outputs.FLASH_WORKSPACE }}"
+          
+          RELEASE_ID="${{ steps.release.outputs.RELEASE_ID }}"
+          FLASH_IMAGE="${{ steps.build_flash.outputs.FLASH_IMAGE }}"
+          SHA256_FILE="${{ steps.build_flash.outputs.SHA256_FILE }}"
+          
+          # 上传Flash镜像文件
+          echo "上传 ${FLASH_IMAGE}..."
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"${FLASH_IMAGE}" \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${FLASH_IMAGE}"
+          
+          # 上传SHA256校验文件
+          echo "上传 ${SHA256_FILE}..."
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: text/plain" \
+            --data-binary @"${SHA256_FILE}" \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${SHA256_FILE}"
+          
+          echo "上传完成！"
+
+      - name: 清理工作空间
+        if: always()
+        run: |
+          echo "清理工作空间..."
+          sudo rm -rf "${{ steps.init.outputs.FLASH_WORKSPACE }}" 2>/dev/null || true
+
+      - name: 构建总结
+        if: success()
+        run: |
+          echo "🎉 Flash镜像构建成功！"
+          echo ""
+          echo "📦 构建信息："
+          echo "  - 源镜像: ${{ steps.download.outputs.SOURCE_IMAGE }}"
+          echo "  - Flash镜像: ${{ steps.build_flash.outputs.FLASH_IMAGE }}"
+          echo "  - 设备类型: ${{ inputs.build_device || 'efused-wxy-oec' }}"
+          echo "  - Release: ${{ steps.init.outputs.RELEASE_TAG }}"
+          echo ""
+          echo "💡 使用说明："
+          echo "  1. 从 https://github.com/${{ github.repository }}/releases/tag/${{ steps.init.outputs.RELEASE_TAG }} 下载Flash镜像"
+          echo "  2. 解压zip文件得到img镜像"
+          echo "  3. 使用rkdevtool写入到设备Flash存储"
+          echo ""
+          echo "⚠️  注意：Flash镜像包含完整的7个分区，刷入前请备份重要数据！" 
