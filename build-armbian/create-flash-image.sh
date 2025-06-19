@@ -96,7 +96,7 @@ create_flash_image() {
     
     # 创建固定大小的Flash镜像文件
     echo -e "${INFO} 创建固定大小的Flash镜像文件 (7.28 GiB)..."
-    dd if=/dev/zero of="${flash_img_path}" bs=100M count=${flash_size_bytes} status=progress
+    dd if=/dev/zero of="${flash_img_path}" bs=1M count=${flash_size_mb} status=progress
     
     # 创建循环设备
     flash_loop=$(losetup -f)
