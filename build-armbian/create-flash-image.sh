@@ -77,11 +77,6 @@ create_flash_image() {
         work_img="${output_dir}/temp_source.img"
     fi
     
-    # 获取源镜像信息
-    echo -e "${INFO} 分析源镜像分区结构..."
-    source_size=$(stat -c%s "${work_img}")
-    source_size_mb=$((source_size / 1024 / 1024))
-    
     # 创建Flash镜像文件名
     # 获取原始文件名（去除路径和扩展名）
     base_name=$(basename "${source_img}")
@@ -95,63 +90,70 @@ create_flash_image() {
     
     echo -e "${INFO} 创建Flash镜像: ${flash_img_name}"
     
-    # 计算Flash镜像大小（保证有足够空间）
-    flash_size_mb=$((source_size_mb + 1024))
+    # Flash镜像固定大小：7.28 GiB = 7818182656 bytes = 15269888 sectors
+    flash_size_bytes=7818182656
+    flash_size_mb=$((flash_size_bytes / 1024 / 1024))
     
-    # 创建空的Flash镜像文件
-    echo -e "${INFO} 创建${flash_size_mb}MB的Flash镜像文件..."
-    dd if=/dev/zero of="${flash_img_path}" bs=1M count=${flash_size_mb} status=progress
+    # 创建固定大小的Flash镜像文件
+    echo -e "${INFO} 创建固定大小的Flash镜像文件 (7.28 GiB)..."
+    dd if=/dev/zero of="${flash_img_path}" bs=1 count=${flash_size_bytes} status=progress
     
     # 创建循环设备
     flash_loop=$(losetup -f)
     losetup "${flash_loop}" "${flash_img_path}"
     
-    # 复制OEC基础镜像的分区表到Flash镜像（包含分区1-5）
-    echo -e "${INFO} 复制OEC基础分区表（分区1-5）..."
+    # 创建Flash镜像的GPT分区表结构
+    echo -e "${INFO} 创建Flash镜像的GPT分区表..."
     echo -e "${INFO} 检查基础分区表文件: ${factory_part_img}"
     [[ ! -f "${factory_part_img}" ]] && error_msg "基础分区表文件不存在: ${factory_part_img}"
     
-    # 复制到分区5结束位置：360447扇区 * 512字节/扇区 = 184548864字节 = 360448扇区
-    # 409600扇区对应200MB，应该涵盖所有分区1-5的数据
-    dd if="${factory_part_img}" of="${flash_loop}" bs=512 count=409600 conv=notrunc
+    # 先创建空的GPT分区表
+    sgdisk -Z "${flash_loop}" || error_msg "清空分区表失败"
     
-    # 创建分区6和7（基础镜像只有1-5分区）
-    echo -e "${INFO} 创建分区6和7..."
+    # 设置磁盘GUID（对应原厂分区表）
+    sgdisk -U 9F6F0000-0000-4505-8000-6666000042BD "${flash_loop}"
     
-    # 显示当前分区表状态
-    echo -e "${INFO} 复制基础分区表后的分区状态："
-    sgdisk -p "${flash_loop}" || echo "无法显示分区表"
+    # 创建分区1-5，保持与原厂分区完全相同的起止位置和类型
+    echo -e "${INFO} 创建分区1-5（与原厂分区完全匹配）..."
+    # 使用0000类型码对应"unknown"类型
+    sgdisk -n 1:16384:24575 -t 1:0000 -c 1:"uboot" -u 1:67110000-0000-416d-8000-5693000068fa "${flash_loop}"
+    sgdisk -n 2:24576:32767 -t 2:0000 -c 2:"misc" -u 2:b8260000-0000-4b79-8000-542300005ce1 "${flash_loop}"
+    sgdisk -n 3:32768:163839 -t 3:0000 -c 3:"boot" -u 3:7c500000-0000-4c1e-8000-6d0000000dd8 "${flash_loop}"
+    sgdisk -n 4:163840:294911 -t 4:0000 -c 4:"kernel" -u 4:9a250000-0000-4d03-8000-231000002148 "${flash_loop}"
+    sgdisk -n 5:294912:360447 -t 5:0000 -c 5:"env" -u 5:fa2c0000-0000-4405-8000-6d3d00006f9a "${flash_loop}"
     
-    # 创建分区6 (boot分区，512MB)
-    echo -e "${INFO} 创建分区6 (boot, 512MB)..."
+    # 创建分区6和7
     sgdisk -n 6:360448:1409023 -t 6:8300 -c 6:"boot" -u 6:e2389fdb-8450-4192-83b5-f3ee89b17046 "${flash_loop}"
-    
-    # 创建分区7 (rootfs分区，使用剩余空间)
-    echo -e "${INFO} 创建分区7 (rootfs, 剩余空间)..."
     sgdisk -n 7:1409024:0 -t 7:8300 -c 7:"rootfs" -u 7:8b4e9cfa-ac66-4e91-8209-da8de6772422 "${flash_loop}"
-    
-    # 显示最终分区表状态
-    echo -e "${INFO} 创建分区6和7后的分区状态："
-    sgdisk -p "${flash_loop}" || echo "无法显示分区表"
-    
-    # 为efused-wxy-oec设备确保正确的分区UUID
-    if [[ "${device_name}" == *"efused-wxy-oec"* ]]; then
-        echo -e "${INFO} 设置正确的分区UUID..."
-        # 设置磁盘GUID
-        sgdisk -U 9F6F0000-0000-4505-8000-6666000042BD "${flash_loop}"
-        # 设置各分区的PARTUUID（这些已经在基础镜像中设置好了）
-        sgdisk -u 1:67110000-0000-416d-8000-5693000068fa "${flash_loop}"
-        sgdisk -u 2:b8260000-0000-4b79-8000-542300005ce1 "${flash_loop}"
-        sgdisk -u 3:7c500000-0000-4c1e-8000-6d0000000dd8 "${flash_loop}"
-        sgdisk -u 4:9a250000-0000-4d03-8000-231000002148 "${flash_loop}"
-        sgdisk -u 5:fa2c0000-0000-4405-8000-6d3d00006f9a "${flash_loop}"
-        sgdisk -u 6:e2389fdb-8450-4192-83b5-f3ee89b17046 "${flash_loop}"
-        sgdisk -u 7:8b4e9cfa-ac66-4e91-8209-da8de6772422 "${flash_loop}"
-    fi
     
     # 通知内核重新读取分区表
     partprobe "${flash_loop}"
     sleep 2
+    
+    # 创建基础镜像的循环设备以便复制分区数据
+    factory_loop=$(losetup -f)
+    losetup -P "${factory_loop}" "${factory_part_img}"
+    sleep 2
+    
+    # 复制原厂分区1-5的数据到Flash镜像对应分区
+    echo -e "${INFO} 复制原厂分区数据到Flash镜像..."
+    echo -e "${INFO} 复制分区1 (uboot)..."
+    dd if="${factory_loop}p1" of="${flash_loop}p1" bs=512 conv=notrunc status=progress 2>/dev/null || true
+    echo -e "${INFO} 复制分区2 (misc)..."
+    dd if="${factory_loop}p2" of="${flash_loop}p2" bs=512 conv=notrunc status=progress 2>/dev/null || true
+    echo -e "${INFO} 复制分区3 (boot)..."
+    dd if="${factory_loop}p3" of="${flash_loop}p3" bs=512 conv=notrunc status=progress 2>/dev/null || true
+    echo -e "${INFO} 复制分区4 (kernel)..."
+    dd if="${factory_loop}p4" of="${flash_loop}p4" bs=512 conv=notrunc status=progress 2>/dev/null || true
+    echo -e "${INFO} 复制分区5 (env)..."
+    dd if="${factory_loop}p5" of="${flash_loop}p5" bs=512 conv=notrunc status=progress 2>/dev/null || true
+    
+    # 清理基础镜像的循环设备
+    losetup -d "${factory_loop}"
+    
+    # 显示最终分区表状态
+    echo -e "${INFO} Flash镜像完整分区表："
+    sgdisk -p "${flash_loop}" || echo "无法显示分区表"
     
     # 挂载源镜像以提取分区内容
     echo -e "${INFO} 挂载源镜像..."
