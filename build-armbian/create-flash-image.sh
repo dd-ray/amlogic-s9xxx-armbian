@@ -25,15 +25,15 @@ download_oec_base() {
     local factory_part_archive="${output_dir}/part_factory.img.tar.gz"
     local factory_part_file="${output_dir}/part_factory.img"
     
-    echo -e "${INFO} 下载OEC基础分区表镜像..."
     if [[ ! -f "${factory_part_file}" ]]; then
+        echo -e "${INFO} 下载OEC基础分区表镜像..." >&2
         # 下载压缩包
         if [[ ! -f "${factory_part_archive}" ]]; then
             wget -O "${factory_part_archive}" "${factory_part_url}" || error_msg "下载OEC基础镜像失败"
         fi
         
         # 解压缩
-        echo -e "${INFO} 解压分区表镜像..."
+        echo -e "${INFO} 解压分区表镜像..." >&2
         tar -xzf "${factory_part_archive}" -C "${output_dir}" || error_msg "解压分区表镜像失败"
         
         # 清理压缩包
@@ -63,6 +63,7 @@ create_flash_image() {
     
     # 下载OEC基础镜像
     factory_part_img=$(download_oec_base "${output_dir}")
+    echo -e "${INFO} 基础分区表文件路径: ${factory_part_img}"
     
     # 解压源镜像（如果是压缩格式）
     local work_img="${source_img}"
@@ -107,6 +108,9 @@ create_flash_image() {
     
     # 复制OEC基础镜像的分区表到Flash镜像
     echo -e "${INFO} 复制OEC基础分区表..."
+    echo -e "${INFO} 检查基础分区表文件: ${factory_part_img}"
+    [[ ! -f "${factory_part_img}" ]] && error_msg "基础分区表文件不存在: ${factory_part_img}"
+    
     dd if="${factory_part_img}" of="${flash_loop}" bs=512 count=409600 conv=notrunc
     
     # 使用sgdisk扩展分区7到整个剩余空间
