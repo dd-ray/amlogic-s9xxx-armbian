@@ -216,9 +216,6 @@ jobs:
             - **断电风险**: 刷写过程中不要断电或拔除设备
             - **原厂固件**: 建议刷写前备份原厂固件以便恢复
 
-            ---
-            
-            🔧 **技术支持**: [Issues](https://github.com/${{ github.repository }}/issues) | 📖 **详细文档**: [README](https://github.com/${{ github.repository }}/blob/main/README-Flash-Build.md)
           artifacts: "${{ steps.init.outputs.FLASH_WORKSPACE }}/${{ steps.build_flash.outputs.FLASH_IMAGE }},${{ steps.init.outputs.FLASH_WORKSPACE }}/${{ steps.build_flash.outputs.SHA256_FILE }}"
           allowUpdates: true
           updateOnlyUnreleased: false

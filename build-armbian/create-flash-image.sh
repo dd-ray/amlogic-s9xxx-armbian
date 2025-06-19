@@ -116,8 +116,8 @@ create_flash_image() {
     
     # 创建分区6和7
     echo -e "${INFO} 创建分区6和7..."
-    sgdisk -n 6:360448:1409023 -t 6:8300 -c 6:"boot" -u 6:e2389fdb-8450-4192-83b5-f3ee89b17046 "${flash_loop}"
-    sgdisk -n 7:1409024:0 -t 7:8300 -c 7:"rootfs" -u 7:8b4e9cfa-ac66-4e91-8209-da8de6772422 "${flash_loop}"
+    sgdisk -n 6:360448:1409023 -t 6:8300 -c 6:"armbian_boot" -u 6:e2389fdb-8450-4192-83b5-f3ee89b17046 "${flash_loop}"
+    sgdisk -n 7:1409024:0 -t 7:8300 -c 7:"armbian_rootfs" -u 7:8b4e9cfa-ac66-4e91-8209-da8de6772422 "${flash_loop}"
     
     # 通知内核重新读取分区表
     partprobe "${flash_loop}"
