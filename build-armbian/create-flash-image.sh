@@ -106,19 +106,33 @@ create_flash_image() {
     flash_loop=$(losetup -f)
     losetup "${flash_loop}" "${flash_img_path}"
     
-    # 复制OEC基础镜像的分区表到Flash镜像
-    echo -e "${INFO} 复制OEC基础分区表..."
+    # 复制OEC基础镜像的分区表到Flash镜像（包含分区1-5）
+    echo -e "${INFO} 复制OEC基础分区表（分区1-5）..."
     echo -e "${INFO} 检查基础分区表文件: ${factory_part_img}"
     [[ ! -f "${factory_part_img}" ]] && error_msg "基础分区表文件不存在: ${factory_part_img}"
     
+    # 复制到分区5结束位置：360447扇区 * 512字节/扇区 = 184548864字节 = 360448扇区
+    # 409600扇区对应200MB，应该涵盖所有分区1-5的数据
     dd if="${factory_part_img}" of="${flash_loop}" bs=512 count=409600 conv=notrunc
     
-    # 使用sgdisk扩展分区7到整个剩余空间
-    echo -e "${INFO} 扩展rootfs分区到全部剩余空间..."
-    # 先删除分区7
-    sgdisk -d 7 "${flash_loop}"
-    # 重新创建分区7，使用原来的PARTUUID
+    # 创建分区6和7（基础镜像只有1-5分区）
+    echo -e "${INFO} 创建分区6和7..."
+    
+    # 显示当前分区表状态
+    echo -e "${INFO} 复制基础分区表后的分区状态："
+    sgdisk -p "${flash_loop}" || echo "无法显示分区表"
+    
+    # 创建分区6 (boot分区，512MB)
+    echo -e "${INFO} 创建分区6 (boot, 512MB)..."
+    sgdisk -n 6:360448:1409023 -t 6:8300 -c 6:"boot" -u 6:e2389fdb-8450-4192-83b5-f3ee89b17046 "${flash_loop}"
+    
+    # 创建分区7 (rootfs分区，使用剩余空间)
+    echo -e "${INFO} 创建分区7 (rootfs, 剩余空间)..."
     sgdisk -n 7:1409024:0 -t 7:8300 -c 7:"rootfs" -u 7:8b4e9cfa-ac66-4e91-8209-da8de6772422 "${flash_loop}"
+    
+    # 显示最终分区表状态
+    echo -e "${INFO} 创建分区6和7后的分区状态："
+    sgdisk -p "${flash_loop}" || echo "无法显示分区表"
     
     # 为efused-wxy-oec设备确保正确的分区UUID
     if [[ "${device_name}" == *"efused-wxy-oec"* ]]; then

@@ -168,64 +168,65 @@ jobs:
           sha256sum "${FLASH_IMAGE}" > "${FLASH_IMAGE}.sha256"
           echo "SHA256_FILE=${FLASH_IMAGE}.sha256" >> $GITHUB_OUTPUT
 
-      - name: 检查或创建Flash Release
-        id: release
-        run: |
-          # 检查release是否存在
-          RELEASE_TAG="${{ steps.init.outputs.RELEASE_TAG }}"
-          
-          RELEASE_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}" | \
-            jq -r '.id // empty')
-          
-          if [[ -z "${RELEASE_ID}" ]]; then
-            echo "创建新的release: ${RELEASE_TAG}"
-            RELEASE_DATA=$(curl -s -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/${{ github.repository }}/releases" \
-              -d '{
-                "tag_name": "'${RELEASE_TAG}'",
-                "name": "'${RELEASE_TAG}'",
-                "body": "Flash镜像包含完整的分区结构：\n\n* 分区1-5: 原厂分区\n* 分区6: boot分区  \n* 分区7: 系统分区\n\n使用方法：\n1. 解压zip文件\n2. 使用rkdevtool或类似工具写入Flash\n\n⚠️ 警告：刷入前请确保备份重要数据！",
-                "draft": false,
-                "prerelease": false
-              }')
-            RELEASE_ID=$(echo "${RELEASE_DATA}" | jq -r '.id')
-          else
-            echo "使用现有release: ${RELEASE_TAG} (ID: ${RELEASE_ID})"
-          fi
-          
-          echo "RELEASE_ID=${RELEASE_ID}" >> $GITHUB_OUTPUT
+      - name: 发布Flash镜像到Release
+        uses: ncipollo/release-action@main
+        with:
+          tag: ${{ steps.init.outputs.RELEASE_TAG }}
+          name: ${{ steps.init.outputs.RELEASE_TAG }}
+          body: |
+            ## 📦 Flash 镜像发布
 
-      - name: 上传Flash镜像到Release
-        id: upload
-        run: |
-          echo "上传Flash镜像到release..."
-          
-          cd "${{ steps.init.outputs.FLASH_WORKSPACE }}"
-          
-          RELEASE_ID="${{ steps.release.outputs.RELEASE_ID }}"
-          FLASH_IMAGE="${{ steps.build_flash.outputs.FLASH_IMAGE }}"
-          SHA256_FILE="${{ steps.build_flash.outputs.SHA256_FILE }}"
-          
-          # 上传Flash镜像文件
-          echo "上传 ${FLASH_IMAGE}..."
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @"${FLASH_IMAGE}" \
-            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${FLASH_IMAGE}"
-          
-          # 上传SHA256校验文件
-          echo "上传 ${SHA256_FILE}..."
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: text/plain" \
-            --data-binary @"${SHA256_FILE}" \
-            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${SHA256_FILE}"
-          
-          echo "上传完成！"
+            **构建信息：**
+            - 源镜像: ${{ steps.download.outputs.SOURCE_IMAGE }}
+            - Flash镜像: ${{ steps.build_flash.outputs.FLASH_IMAGE }}
+            - 设备类型: ${{ inputs.build_device || 'efused-wxy-oec' }}
+            - 构建时间: ${{ steps.init.outputs.BUILD_DATE }}
+
+            ## 📋 分区结构
+
+            Flash镜像包含完整的7个分区结构：
+
+            | 分区号 | 分区名 | 大小 | 描述 |
+            |--------|--------|------|------|
+            | 1 | uboot | 4MB | U-Boot 分区 (原厂) |
+            | 2 | misc | 4MB | 杂项分区 (原厂) |
+            | 3 | boot | 64MB | 启动分区 (原厂) |
+            | 4 | kernel | 64MB | 内核分区 (原厂) |
+            | 5 | env | 32MB | 环境变量分区 (原厂) |
+            | 6 | boot | 512MB | Armbian 启动分区 |
+            | 7 | rootfs | 剩余空间 | Armbian 根文件系统 |
+
+            ## 💡 使用方法
+
+            1. **下载文件**: 下载Flash镜像zip文件和对应的SHA256校验文件
+            2. **验证完整性**: 
+               ```bash
+               sha256sum -c *.sha256
+               ```
+            3. **解压镜像**: 
+               ```bash
+               unzip ${{ steps.build_flash.outputs.FLASH_IMAGE }}
+               ```
+            4. **刷写到设备**: 使用 `rkdevtool` 或类似工具写入到设备Flash存储
+
+            ## ⚠️ 重要提醒
+
+            - **备份数据**: Flash镜像包含完整的7个分区，会覆盖所有原有数据
+            - **确认设备**: 确保镜像适用于您的设备型号，错误的镜像可能导致设备无法启动  
+            - **断电风险**: 刷写过程中不要断电或拔除设备
+            - **原厂固件**: 建议刷写前备份原厂固件以便恢复
+
+            ---
+            
+            🔧 **技术支持**: [Issues](https://github.com/${{ github.repository }}/issues) | 📖 **详细文档**: [README](https://github.com/${{ github.repository }}/blob/main/README-Flash-Build.md)
+          artifacts: "${{ steps.init.outputs.FLASH_WORKSPACE }}/${{ steps.build_flash.outputs.FLASH_IMAGE }},${{ steps.init.outputs.FLASH_WORKSPACE }}/${{ steps.build_flash.outputs.SHA256_FILE }}"
+          allowUpdates: true
+          updateOnlyUnreleased: false
+          replacesArtifacts: true
+          makeLatest: false
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 清理工作空间
         if: always()
