@@ -82,7 +82,13 @@ create_flash_image() {
     source_size_mb=$((source_size / 1024 / 1024))
     
     # 创建Flash镜像文件名
-    base_name=$(basename "${work_img}" .img)
+    # 获取原始文件名（去除路径和扩展名）
+    base_name=$(basename "${source_img}")
+    # 去除各种压缩格式的扩展名
+    base_name="${base_name%.img.gz}"
+    base_name="${base_name%.img.xz}"
+    base_name="${base_name%.img}"
+    
     flash_img_name="Flash_${base_name}.img"
     flash_img_path="${output_dir}/${flash_img_name}"
     
@@ -143,10 +149,14 @@ create_flash_image() {
     
     mkdir -p "${temp_mount_boot}" "${temp_mount_root}" "${temp_mount_source_boot}" "${temp_mount_source_root}"
     
+    # 定义UUID变量
+    BOOT_UUID="e05f8383-636b-4308-aa37-7867505dd45d"
+    ROOTFS_UUID="f961d49a-2cdc-4aa1-b894-e54c56a384f5"
+    
     # 格式化Flash镜像的boot和rootfs分区，设置正确的UUID
     echo -e "${INFO} 格式化Flash镜像分区..."
-    mkfs.ext4 -F -L "BOOT_EMMC" -U "e05f8383-636b-4308-aa37-7867505dd45d" "${flash_loop}p6"
-    mkfs.ext4 -F -L "ROOTFS_EMMC" -U "f961d49a-2cdc-4aa1-b894-e54c56a384f5" "${flash_loop}p7"
+    mkfs.ext4 -F -L "BOOT_EMMC" -U "${BOOT_UUID}" "${flash_loop}p6"
+    mkfs.ext4 -F -L "ROOTFS_EMMC" -U "${ROOTFS_UUID}" "${flash_loop}p7"
     
     # 挂载分区
     echo -e "${INFO} 挂载分区进行数据复制..."
@@ -163,6 +173,43 @@ create_flash_image() {
     # 复制rootfs分区内容
     echo -e "${INFO} 复制rootfs分区内容..."
     cp -a "${temp_mount_source_root}"/* "${temp_mount_root}/" 2>/dev/null || true
+    sync
+    
+    # 更新配置文件中的UUID
+    echo -e "${INFO} 更新配置文件中的UUID..."
+    
+    # 更新boot分区中的extlinux.conf
+    extlinux_conf="${temp_mount_boot}/extlinux/extlinux.conf"
+    if [[ -f "${extlinux_conf}" ]]; then
+        echo -e "${INFO} 更新extlinux.conf中的rootfs UUID..."
+        # 更新root=UUID=xxx部分
+        sed -i "s/root=UUID=[a-fA-F0-9-]*/root=UUID=${ROOTFS_UUID}/g" "${extlinux_conf}"
+        echo -e "${INFO} extlinux.conf更新完成"
+    else
+        echo -e "${INFO} 未找到extlinux.conf文件，跳过更新"
+    fi
+    
+    # 更新rootfs分区中的fstab
+    fstab_file="${temp_mount_root}/etc/fstab"
+    if [[ -f "${fstab_file}" ]]; then
+        echo -e "${INFO} 更新fstab中的UUID..."
+        
+        # 备份原始fstab
+        cp "${fstab_file}" "${fstab_file}.bak"
+        
+        # 更新rootfs分区的UUID
+        sed -i "s/UUID=[a-fA-F0-9-]*\s*\/\s*ext4/UUID=${ROOTFS_UUID} \/ ext4/g" "${fstab_file}"
+        
+        # 更新boot分区的UUID（如果存在）
+        sed -i "s/UUID=[a-fA-F0-9-]*\s*\/boot\s*ext4/UUID=${BOOT_UUID} \/boot ext4/g" "${fstab_file}"
+        
+        echo -e "${INFO} fstab更新完成"
+        echo -e "${INFO} 新的fstab内容："
+        cat "${fstab_file}"
+    else
+        echo -e "${INFO} 未找到fstab文件，跳过更新"
+    fi
+    
     sync
     
     # 卸载所有分区

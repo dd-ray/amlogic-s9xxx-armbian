@@ -54,6 +54,8 @@ GitHub Action 会自动执行以下步骤：
    - 扩展分区7到整个剩余空间
    - 格式化分区6和7，设置正确的文件系统UUID
    - 将 Armbian 镜像的 boot 和 rootfs 内容复制到对应分区
+   - 自动更新 extlinux.conf 中的 rootfs UUID 引用
+   - 自动更新 fstab 中的分区 UUID 引用
    - 压缩为 zip 格式
 5. **发布镜像**: 上传到指定的 release，同时生成 SHA256 校验文件
 
